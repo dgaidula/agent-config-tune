@@ -228,7 +228,7 @@ function pathCovers(g, other) {
 function looksOneOff(inner) {
   return (
     /\//.test(inner) || // a path
-    /\b(sed -n|perl -pi|-pi -e|cp |mv |rm )\b/.test(inner) ||
+    /\b(sed -n|perl -pi|-pi -e)\b|\b(cp|mv|rm) /.test(inner) ||
     /"[^"]{15,}"/.test(inner) // a long quoted literal
   );
 }
@@ -359,7 +359,7 @@ function lintFile(p, config) {
 
   // --- 4. dead one-off candidates (advisory) --------------------------------
   for (const a of bashEntries) {
-    if (a.prefix) continue; // skip globs
+    if (globPrefix(a.inner) !== null) continue; // skip globs
     const covered = globs.some((g) => g.entry !== a.entry && covers(g.prefix, a.inner));
     const supersededAlready = findings.superseded.some((s) => s.entry === a.entry);
     if (!covered && !supersededAlready && looksOneOff(a.inner)) {

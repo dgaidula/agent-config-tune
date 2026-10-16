@@ -392,3 +392,17 @@ test('--help prints the header, not code; --version prints the package version',
   const version = run(home, ['--version']);
   assert.equal(version.stdout, `lint ${VERSION}\n`);
 }));
+
+test('one-off?: a trailing glob with a `/` in it is a glob, not a one-off', () => withHome((home) => {
+  project(home, 'globs', { allow: ['Bash(./scripts/build.sh *)'], deny: [] });
+  const r = run(home, ['--brief', 'globs']);
+  assert.deepEqual(lines(r.stdout).filter((l) => l.includes('one-off?')), []);
+  assert.equal(r.status, 0);
+}));
+
+test('one-off?: rm/cp/mv with a flag are flagged like the plain forms', () => withHome((home) => {
+  project(home, 'flags', { allow: ['Bash(rm -rf build)', 'Bash(cp -r a b)', 'Bash(mv -f a b)', 'Bash(rm foo)'], deny: [] });
+  const r = run(home, ['--brief', 'flags']);
+  assert.deepEqual(lines(r.stdout).filter((l) => l.includes('one-off?')).map((l) => l.match(/one-off\? (\S+\([^)]*\))/)[1]),
+    ['Bash(rm -rf build)', 'Bash(cp -r a b)', 'Bash(mv -f a b)', 'Bash(rm foo)']);
+}));
