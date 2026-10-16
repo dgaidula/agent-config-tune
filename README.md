@@ -64,7 +64,9 @@ A config’s `reviewReport` (a prior review report, or a directory of dated
 ones) puts that review’s verdict first in the run: `ok` when CLEAN,
 otherwise `skip`, shown with its reason but never failing the run. You are
 done when every settings item is `ok`; the review item stays until the next
-CLEAN review.
+CLEAN review. A `reviewReport` that points at nothing readable (no file, an
+empty directory, or a file it cannot read) is a `skip` item too, naming the
+path and why, so a mistyped path never passes silently.
 
 For your global settings, pass both files:
 `lint.mjs ~/.claude/settings.json ~/.claude/settings.local.json` (a bare
