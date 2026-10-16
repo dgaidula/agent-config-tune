@@ -37,6 +37,8 @@
 //   review        ok or skip   the latest prior review's verdict, first in the
 //                        run: ok when it reads CLEAN, skip otherwise (shown
 //                        with its reason, but never a settings finding)
+//   review-missing skip  reviewReport is set but points at nothing readable:
+//                        missing, or unreadable (named, never a failure)
 // A path with no settings file refuses; an unreadable or invalid one fails, as
 // does one whose permissions.allow or .deny is not an array of strings.
 //
@@ -133,7 +135,7 @@ function verdict(item) {
   if (ADVISORY_CHECKS.has(item.check)) return 'warn';
   // A non-CLEAN review is advisory context for the tune, not a settings finding.
   if (item.check === 'review') return /^CLEAN\b/.test(item.reviewVerdict) ? 'ok' : 'skip';
-  if (item.check === 'enumerated') return 'skip';
+  if (item.check === 'enumerated' || item.check === 'review-missing') return 'skip';
   if (item.check === 'clean') return 'ok';
   throw new Error(`verdict(): unknown check label ${JSON.stringify(item.check)}`);
 }
@@ -259,23 +261,25 @@ const short = (f) => {
 
 /**
  * Resolve `reviewReport` (a report file, or a directory of dated reports) to the
- * newest report and its verdict, for surfacing at the top of a run. Best-effort:
- * returns null if nothing readable is found.
+ * newest report and its verdict, for surfacing at the top of a run. When nothing
+ * readable is found, returns { file, why }: why is 'missing' or 'unreadable'.
  */
 function latestReview(spec) {
+  const p = resolve(expandHome(spec));
+  let file = p;
   try {
-    const p = resolve(expandHome(spec));
-    let file = p;
     if (statSync(p).isDirectory()) {
       const md = readdirSync(p).filter((f) => f.endsWith('.md')).map((f) => join(p, f));
-      if (md.length === 0) return null;
+      if (md.length === 0) return { file, why: 'missing', detail: `no .md reports in ${tilde(p)}` };
       file = md.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
     }
     const text = readFileSync(file, 'utf8');
     const m = text.match(/Verdict:\s*([A-Z][A-Z ]*[A-Z])/);
     return { file, verdict: m ? m[1].trim() : 'UNKNOWN' };
-  } catch {
-    return null;
+  } catch (e) {
+    return e.code === 'ENOENT'
+      ? { file, why: 'missing', detail: `nothing at ${tilde(file)}` }
+      : { file, why: 'unreadable', detail: `cannot read ${tilde(file)}: ${e.code || e.message}` };
   }
 }
 
@@ -455,7 +459,12 @@ function driftItems(linted, config) {
 function reviewItems(config) {
   if (!config.reviewReport) return [];
   const rv = latestReview(config.reviewReport);
-  if (!rv) return [];
+  if (rv.why) {
+    return [makeItem({
+      path: rv.file, name: tilde(rv.file), check: 'review-missing',
+      summary: `review report ${rv.why}`, reason: rv.detail, data: { why: rv.why },
+    })];
+  }
   return [makeItem({
     path: rv.file, name: tilde(rv.file), check: 'review', reviewVerdict: rv.verdict,
     summary: `latest review: ${rv.verdict}`,

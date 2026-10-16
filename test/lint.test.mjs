@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -375,12 +375,23 @@ test('an unknown check label is an internal error, never reported clean', () => 
   assert.match(r.stderr, /unknown check label "bogus"/);
 }));
 
-test('reviewReport: nothing readable there adds no item, as before', () => withHome((home) => {
+test('reviewReport: nothing readable there is one skip item naming the path and why; exit unchanged', () => withHome((home) => {
   project(home, 'tidy', CLEAN);
   writeFileSync(path.join(home, 'tune.json'), JSON.stringify({ reviewReport: '~/no-reviews-here' }));
   const r = run(home, ['--brief', '--config', 'tune.json', 'tidy']);
-  assert.equal(lines(r.stdout)[0], '✓ ok     clean (1 allow, 1 deny)                ~/tidy');
+  assert.deepEqual(lines(r.stdout).slice(0, 3), [
+    '• skip   review report missing                  ~/no-reviews-here  (nothing at ~/no-reviews-here)',
+    '✓ ok     clean (1 allow, 1 deny)                ~/tidy',
+    'summary: ok=1 warn=0 skip=1 refuse=0 fail=0',
+  ]);
   assert.equal(r.status, 0);
+  // A report that exists but cannot be read says so instead.
+  writeFileSync(path.join(home, 'locked.md'), 'Verdict: CLEAN\n');
+  chmodSync(path.join(home, 'locked.md'), 0o000);
+  writeFileSync(path.join(home, 'tune.json'), JSON.stringify({ reviewReport: '~/locked.md' }));
+  const u = run(home, ['--brief', '--config', 'tune.json', 'tidy']);
+  assert.match(lines(u.stdout)[0], /^• skip {3}review report unreadable +~\/locked\.md {2}\(cannot read ~\/locked\.md: EACCES\)$/);
+  assert.equal(u.status, 0);
 }));
 
 test('--help prints the header, not code; --version prints the package version', () => withHome((home) => {
