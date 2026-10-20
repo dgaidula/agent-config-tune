@@ -11,9 +11,9 @@
 //   node lint.mjs --config tune.json <path>...
 //   node lint.mjs --help | --version
 //
-//   Each <path> is a project directory (its .claude/settings.local.json is
-//   read) or a settings .json file. Two or more paths add the cross-project
-//   drift check.
+//   Each <path> is a project directory (its .claude/settings.json and
+//   .claude/settings.local.json are read, whichever exist) or a settings .json
+//   file. Two or more paths add the cross-project drift check.
 //
 // Checks, per file, with the verdict each one gives:
 //   superseded    fail   a narrow Bash entry already covered by a broader `X *` glob,
@@ -27,6 +27,10 @@
 //                        are: consolidation is deliberately not suggested
 //   one-off?      warn   a non-glob Bash entry that looks single-use
 //   push-guard    warn   a broad glob allowed with no deny on its dangerous subcommand
+//   in-global     warn   an allow entry the global settings already grant (the same
+//                        entry, or one a global glob, `dir/**` or `mcp__server__*`
+//                        covers); a committed copy may be deliberate, for sessions
+//                        that run without your global settings
 //   clean         ok     a file with none of the above
 // Across files (two or more paths):
 //   drift         warn   an entry present in some files but not all, excluding
@@ -84,6 +88,9 @@
 //                                           // ones); its latest verdict is the first
 //                                           // item of the run, so a non-CLEAN review
 //                                           // gets addressed alongside the tune
+//     "globalSettings":   ["path", ...]     // the in-global baseline; REPLACES the
+//                                           // default ~/.claude/settings.json and
+//                                           // ~/.claude/settings.local.json ([] = off)
 //   }
 //
 // Read-only: it reads settings files and the config, writes nothing, and never
@@ -124,7 +131,7 @@ const DEFAULT_SENSITIVE_SERVERS = [/gmail/i, /google-workspace/i, /composio/i, /
 // findings fail, advisory ones warn, a clean check is ok.
 
 const DEFINITE_CHECKS = new Set(['superseded', 'redundant']);
-const ADVISORY_CHECKS = new Set(['consolidate', 'sensitive-*', 'one-off?', 'push-guard', 'drift']);
+const ADVISORY_CHECKS = new Set(['consolidate', 'sensitive-*', 'one-off?', 'push-guard', 'in-global', 'drift']);
 
 // Facts on an item -> its verdict. Pure: reads item fields, returns a string.
 // An unknown label throws (exit 3) rather than passing as clean.
@@ -160,6 +167,7 @@ function loadConfig(configPath) {
     pushGuards: [...DEFAULT_PUSH_GUARDS],
     sensitiveServers: [...DEFAULT_SENSITIVE_SERVERS],
     reviewReport: null,
+    globalSettings: ['~/.claude/settings.json', '~/.claude/settings.local.json'],
   };
   if (!configPath) {
     const adjacent = join(dirname(fileURLToPath(import.meta.url)), 'tune.json');
@@ -172,6 +180,7 @@ function loadConfig(configPath) {
     for (const s of cfg.sensitiveServers ?? []) config.sensitiveServers.push(new RegExp(s, 'i'));
     for (const g of cfg.pushGuards ?? []) config.pushGuards.push(g);
     config.reviewReport = cfg.reviewReport ?? null;
+    if (cfg.globalSettings) config.globalSettings = cfg.globalSettings;
   } catch (e) {
     environmentError(`--config ${configPath}: ${e.message}`);
   }
@@ -180,11 +189,46 @@ function loadConfig(configPath) {
 
 // ---- the checks -------------------------------------------------------------
 
-/** Resolve a CLI path to its settings.local.json (accepts the file or its project dir). */
+/**
+ * Resolve a CLI path to the settings files it names: a .json file is itself; a
+ * project dir is whichever of its two layers exist, else its settings.local.json
+ * (which then refuses as missing).
+ */
 function resolveSettings(p) {
   const abs = resolve(p);
-  if (abs.endsWith('.json')) return abs;
-  return join(abs, '.claude', 'settings.local.json');
+  if (abs.endsWith('.json')) return [abs];
+  const layers = ['settings.json', 'settings.local.json'].map((f) => join(abs, '.claude', f)).filter((f) => existsSync(f));
+  return layers.length ? layers : [join(abs, '.claude', 'settings.local.json')];
+}
+
+/** The global settings' allow entries, the in-global baseline: [{ entry, file }]. Unreadable files are skipped. */
+function loadGlobalAllow(config) {
+  const files = config.globalSettings.map((f) => resolve(expandHome(f)));
+  const entries = [];
+  for (const file of files) {
+    try {
+      const allow = JSON.parse(readFileSync(file, 'utf8'))?.permissions?.allow;
+      if (Array.isArray(allow)) for (const entry of allow) if (typeof entry === 'string') entries.push({ entry, file });
+    } catch {}
+  }
+  return { files, entries };
+}
+
+/** The global entry that grants `entry` (the same entry, or a covering glob, path rule or mcp wildcard), else undefined. */
+function grantedBy(entry, globalEntries) {
+  const inner = bashInner(entry);
+  const path = pathRule(entry);
+  const mcp = mcpParts(entry);
+  return globalEntries.find(({ entry: g }) => {
+    if (g === entry) return true;
+    if (inner !== null && bashInner(g) !== null) {
+      const prefix = globPrefix(bashInner(g));
+      return prefix !== null && covers(prefix, inner);
+    }
+    if (path && pathRule(g)) return pathCovers(pathRule(g), path);
+    if (mcp && mcp.tool !== '*') return g === `mcp__${mcp.server}__*`;
+    return false;
+  });
 }
 
 /** `Bash(<inner>)` -> inner, else null. */
@@ -284,8 +328,7 @@ function latestReview(spec) {
 }
 
 /** Lint one settings file: its items, plus its lists for the drift check (null when unreadable). */
-function lintFile(p, config) {
-  const file = resolveSettings(p);
+function lintFile(file, config, globalAllow) {
   const at = { path: file, name: short(file) };
 
   if (!existsSync(file)) {
@@ -312,7 +355,7 @@ function lintFile(p, config) {
 
   const allow = json?.permissions?.allow ?? [];
   const deny = json?.permissions?.deny ?? [];
-  const findings = { superseded: [], mcpRedundant: [], mcpConsolidate: [], sensitiveWildcard: [], sensitiveKeep: [], deadOneOff: [], pushGuard: [] };
+  const findings = { superseded: [], mcpRedundant: [], mcpConsolidate: [], sensitiveWildcard: [], sensitiveKeep: [], deadOneOff: [], pushGuard: [], inGlobal: [] };
 
   // --- 1. superseded Bash entries -------------------------------------------
   const bashEntries = allow.map((e) => ({ entry: e, inner: bashInner(e) })).filter((x) => x.inner !== null);
@@ -379,6 +422,15 @@ function lintFile(p, config) {
     if (!denied) findings.pushGuard.push(guard);
   }
 
+  // --- 5b. in-global: entries the global settings already grant -------------
+  // The global files are the baseline, so they are never checked against it.
+  if (!globalAllow.files.includes(file)) {
+    for (const entry of allow) {
+      const g = grantedBy(entry, globalAllow.entries);
+      if (g) findings.inGlobal.push({ entry, by: g.entry, file: g.file });
+    }
+  }
+
   // --- the findings as items, in report order -------------------------------
   const items = [
     ...findings.superseded.map((s) => makeItem({ ...at, check: 'superseded', summary: `superseded ${s.entry}`, reason: `covered by ${s.by}`, data: { entry: s.entry, by: s.by } })),
@@ -403,6 +455,11 @@ function lintFile(p, config) {
       ...at, check: 'push-guard', summary: `push-guard Bash(${g.glob} *)`,
       reason: `no deny on ${g.requireDenyPrefix}: ${g.why}`,
       data: { glob: g.glob, requireDenyPrefix: g.requireDenyPrefix },
+    })),
+    ...findings.inGlobal.map((g) => makeItem({
+      ...at, check: 'in-global', summary: `in-global ${g.entry}`,
+      reason: `already allowed by ${tilde(g.file)}${g.by === g.entry ? '' : ` (${g.by})`}`,
+      data: { entry: g.entry, by: g.by, file: g.file },
     })),
   ];
   if (items.length === 0) {
@@ -539,7 +596,8 @@ async function main() {
   if (positionals.length === 0) usageError('no path (expected a project directory or a settings .json file)');
 
   const config = loadConfig(values.config ?? null);
-  const linted = positionals.map((p) => lintFile(p, config));
+  const globalAllow = loadGlobalAllow(config);
+  const linted = positionals.flatMap(resolveSettings).map((file) => lintFile(file, config, globalAllow));
   const items = [...reviewItems(config), ...linted.flatMap((r) => r.items), ...driftItems(linted, config)];
 
   const command = 'lint';

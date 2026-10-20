@@ -18,8 +18,10 @@ The token framing matters and is worth stating to the user:
 
 ## Mode 1 — lint (deterministic)
 
-Run the linter against one or more project dirs (or settings files). It only
-REPORTS — it never edits.
+Run the linter against one or more project dirs (or settings files). A
+project dir is linted through both its layers — `.claude/settings.json` and
+`.claude/settings.local.json`, whichever exist — each reported under its own
+path. It only REPORTS — it never edits.
 
 ```bash
 node <skill-dir>/lint.mjs --brief <project-dir-or-settings.json>...
@@ -91,6 +93,13 @@ What it flags:
   won't recur before removing.
 - **push-guard** — a broad dangerous glob (default: `Bash(git *)`) with no
   deny shadowing its dangerous subcommand (`git push`).
+- **in-global** — a project allow entry your global settings
+  (`~/.claude/settings.json` + `settings.local.json`) already grant, word for
+  word or through a covering glob, `dir/**` or `mcp__server__*`.
+  **Advisory** — a copy in a committed `settings.json` may be deliberate,
+  for cloud sessions or teammates that run without your global settings;
+  ask before deleting. `globalSettings` in the config replaces the baseline
+  (`[]` turns the check off).
 - **drift** — allow/deny entries present in some projects but not all,
   excluding configured site-specific patterns. A `settings.json` and a
   `settings.local.json` in one directory are layers Claude Code merges, so

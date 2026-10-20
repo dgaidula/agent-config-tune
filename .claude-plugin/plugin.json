@@ -1,7 +1,7 @@
 {
   "name": "claude-config-tune",
   "description": "Lint and tune Claude Code configuration: deterministic permission allow-list hygiene (superseded globs, redundant MCP entries, sensitive-server wildcards, missing denies, cross-project drift) plus a measured, verified method for trimming CLAUDE.md context cost.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "Danniel T. Gaidula"
   }

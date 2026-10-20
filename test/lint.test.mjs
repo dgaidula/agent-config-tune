@@ -417,3 +417,43 @@ test('one-off?: rm/cp/mv with a flag are flagged like the plain forms', () => wi
   assert.deepEqual(lines(r.stdout).filter((l) => l.includes('one-off?')).map((l) => l.match(/one-off\? (\S+\([^)]*\))/)[1]),
     ['Bash(rm -rf build)', 'Bash(cp -r a b)', 'Bash(mv -f a b)', 'Bash(rm foo)']);
 }));
+
+test('a project dir reads both layers: settings.json alone is linted, and a pair is two files', () => withHome((home) => {
+  mkdirSync(path.join(home, 'shared', '.claude'), { recursive: true });
+  writeFileSync(path.join(home, 'shared', '.claude', 'settings.json'), JSON.stringify({ permissions: { allow: ['Bash(git *)', 'Bash(git status)'], deny: [] } }));
+  const alone = run(home, ['--brief', 'shared']);
+  assert.match(alone.stdout, /^✗ fail {3}superseded Bash\(git status\) +~\/shared\/\.claude\/settings\.json {2}\(covered by Bash\(git \*\)\)$/m);
+  assert.doesNotMatch(alone.stdout, /^⊘ refuse/m);
+  writeFileSync(path.join(home, 'shared', '.claude', 'settings.local.json'), JSON.stringify({ permissions: { allow: ['Bash(ls *)'] } }));
+  const pair = JSON.parse(run(home, ['--json', 'shared']).stdout);
+  assert.deepEqual([...new Set(pair.items.map((i) => i.path))], [
+    path.join(home, 'shared', '.claude', 'settings.json'),
+    path.join(home, 'shared', '.claude', 'settings.local.json'),
+  ]);
+  assert.equal(pair.items.filter((i) => i.data.check === 'drift').length, 0);
+}));
+
+test('in-global: a project entry the global settings already allow is a warn naming the global entry', () => withHome((home) => {
+  mkdirSync(path.join(home, '.claude'));
+  writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({ permissions: { allow: ['Bash(npm view *)', 'Bash(sw_vers)', 'Read(~/docs/**)', 'mcp__github__*'] } }));
+  writeFileSync(path.join(home, '.claude', 'settings.local.json'), JSON.stringify({ permissions: { allow: ['Skill(claude-api)'] } }));
+  project(home, 'dup', { allow: ['Bash(npm view lodash)', 'Bash(sw_vers)', 'Read(//' + home.replace(/^\//, '') + '/docs/a.md)', 'mcp__github__get_issue', 'Skill(claude-api)', 'Bash(make *)'], deny: [] });
+  const r = run(home, ['--json', 'dup']);
+  const found = JSON.parse(r.stdout).items.filter((i) => i.data.check === 'in-global');
+  assert.deepEqual(found.map((i) => [i.verdict, i.data.entry, i.data.by]), [
+    ['warn', 'Bash(npm view lodash)', 'Bash(npm view *)'],
+    ['warn', 'Bash(sw_vers)', 'Bash(sw_vers)'],
+    ['warn', `Read(//${home.replace(/^\//, '')}/docs/a.md)`, 'Read(~/docs/**)'],
+    ['warn', 'mcp__github__get_issue', 'mcp__github__*'],
+    ['warn', 'Skill(claude-api)', 'Skill(claude-api)'],
+  ]);
+  assert.match(found[1].reason, /^already allowed by ~\/\.claude\/settings\.json/);
+  assert.equal(r.status, 1);
+  // The global files themselves are the baseline, never checked against it.
+  const self = run(home, ['--json', '.claude/settings.json', '.claude/settings.local.json']);
+  assert.equal(JSON.parse(self.stdout).items.filter((i) => i.data.check === 'in-global').length, 0);
+  // A config's globalSettings replaces the default pair; [] turns the check off.
+  writeFileSync(path.join(home, 'off.json'), JSON.stringify({ globalSettings: [] }));
+  const off = run(home, ['--json', '--config', 'off.json', 'dup']);
+  assert.equal(JSON.parse(off.stdout).items.filter((i) => i.data.check === 'in-global').length, 0);
+}));
