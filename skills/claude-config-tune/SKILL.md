@@ -105,6 +105,27 @@ What it flags:
   `settings.local.json` in one directory are layers Claude Code merges, so
   they count as one scope (their union); the global pair alone has no drift.
 
+**Skill size.** `--skills <dir>` (repeatable) adds one item per `<dir>/*/SKILL.md`
+with its bytes and estimated tokens (UTF-8 bytes / 4, rounded up — an estimate,
+not a tokenizer), biggest first. Claude Code re-injects an invoked skill after
+compaction capped at 5,000 tokens per skill and 25,000 in total, keeping only
+the start of the file (`code.claude.com/docs/en/context-window.md`, “What
+survives compaction”). For the global skills:
+`node <skill-dir>/lint.mjs --brief --skills ~/.claude/skills` (no project path is
+needed; with one, both are checked in the same run).
+
+- **skill-size** — a SKILL.md over 4,000 estimated tokens (headroom under the
+  cap). **Advisory** — propose the split: keep the always-needed procedure and
+  the closing rules in `SKILL.md`, move rarely needed parts to
+  `references/<topic>.md`, and leave a one-line pointer where each part was
+  (“read `references/build-mode.md` before an `--build-mode=api` run”). Every
+  instruction must survive, either in `SKILL.md` or behind a pointer that says
+  when to read it.
+- **skill-cut** — the skill’s last `##` section starts past the 5,000-token cap,
+  so after compaction that section is cut (often a closing “Done means”).
+  Headings inside code fences are not sections.
+- **skill-ok** — fits; listed with its size.
+
 After reporting, **propose** the concrete edits and let the user approve
 before touching any file. Apply the removals/wildcards/denies, then re-run
 the linter to confirm clean.

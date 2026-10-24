@@ -8,6 +8,7 @@
 //
 // Usage:
 //   node lint.mjs [--brief | --json | --quiet] <path>...
+//   node lint.mjs [--brief | --json | --quiet] --skills <skills-dir> [<path>...]
 //   node lint.mjs --config tune.json <path>...
 //   node lint.mjs --help | --version
 //
@@ -32,6 +33,16 @@
 //                        covers); a committed copy may be deliberate, for sessions
 //                        that run without your global settings
 //   clean         ok     a file with none of the above
+// Per skill (only with --skills <dir>, below), one item per SKILL.md:
+//   skill-ok      ok     fits: its size is listed, in bytes and estimated tokens
+//   skill-size    warn   over 4,000 estimated tokens (headroom under the cap below)
+//   skill-cut     warn   its last `##` section starts past the cap: the part the
+//                        re-injection drops
+//   Claude Code re-injects an invoked skill after compaction capped at 5,000
+//   tokens per skill (25,000 total) and keeps only the start of the file
+//   (code.claude.com/docs/en/context-window.md, "What survives compaction").
+//   Tokens here are an ESTIMATE: UTF-8 bytes / 4, rounded up, no tokenizer.
+//   Headings inside fenced code blocks do not count as sections.
 // Across files (two or more paths):
 //   drift         warn   an entry present in some files but not all, excluding
 //                        site-specific patterns (`clean` when the lists match);
@@ -74,6 +85,8 @@
 //                     nothing, because every run now exits 1 on any finding,
 //                     advisory ones included. To gate on definite findings
 //                     only, test `summary.fail` in --json.
+//   --skills <dir>    also check every <dir>/*/SKILL.md for size (above); repeatable.
+//                     With it, no <path> is needed. A <dir> that is not there refuses.
 //   --brief, --json, --quiet   the output mode (above).
 //   --help, -h        print this header.
 //   --version         print `lint <version>`.
@@ -131,19 +144,29 @@ const DEFAULT_SENSITIVE_SERVERS = [/gmail/i, /google-workspace/i, /composio/i, /
 // findings fail, advisory ones warn, a clean check is ok.
 
 const DEFINITE_CHECKS = new Set(['superseded', 'redundant']);
-const ADVISORY_CHECKS = new Set(['consolidate', 'sensitive-*', 'one-off?', 'push-guard', 'in-global', 'drift']);
+const ADVISORY_CHECKS = new Set(['consolidate', 'sensitive-*', 'one-off?', 'push-guard', 'in-global', 'drift', 'skill-size', 'skill-cut']);
+const SKILL_CHECKS = new Set(['skill-ok', 'skill-size', 'skill-cut']);
+
+// The re-injection cap and the warning line under it, in estimated tokens.
+// Source: code.claude.com/docs/en/context-window.md ("What survives
+// compaction": invoked skill bodies are re-injected capped at 5,000 tokens per
+// skill and 25,000 total; truncation keeps the start of the file).
+const SKILL_CAP_TOKENS = 5000;
+const SKILL_WARN_TOKENS = 4000;
+const SKILL_CAP_SOURCE = 'code.claude.com/docs/en/context-window.md';
+const estimateTokens = (bytes) => Math.ceil(bytes / 4);
 
 // Facts on an item -> its verdict. Pure: reads item fields, returns a string.
 // An unknown label throws (exit 3) rather than passing as clean.
 function verdict(item) {
   if (item.check === 'invalid-json' || item.check === 'unreadable' || item.check === 'invalid') return 'fail';
-  if (item.check === 'missing') return 'refuse';
+  if (item.check === 'missing' || item.check === 'skills-missing') return 'refuse';
   if (DEFINITE_CHECKS.has(item.check)) return 'fail';
   if (ADVISORY_CHECKS.has(item.check)) return 'warn';
   // A non-CLEAN review is advisory context for the tune, not a settings finding.
   if (item.check === 'review') return /^CLEAN\b/.test(item.reviewVerdict) ? 'ok' : 'skip';
   if (item.check === 'enumerated' || item.check === 'review-missing') return 'skip';
-  if (item.check === 'clean') return 'ok';
+  if (item.check === 'clean' || item.check === 'skill-ok') return 'ok';
   throw new Error(`verdict(): unknown check label ${JSON.stringify(item.check)}`);
 }
 
@@ -512,6 +535,73 @@ function driftItems(linted, config) {
   }));
 }
 
+/**
+ * The byte offset of the last `## ` heading in a SKILL.md (headings inside
+ * fenced code blocks are not headings), or -1 when it has none.
+ */
+function lastSectionOffset(text) {
+  let offset = 0;
+  let last = -1;
+  let fence = null;
+  for (const line of text.split('\n')) {
+    const m = line.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (m) {
+      if (!fence) fence = m[1][0];
+      else if (m[1][0] === fence) fence = null;
+    } else if (!fence && /^## /.test(line)) last = offset;
+    offset += Buffer.byteLength(line) + 1;
+  }
+  return last;
+}
+
+/** One item per skill directory holding a SKILL.md, biggest first; a missing directory refuses. */
+function skillItems(dirs) {
+  const items = [];
+  for (const dir of dirs) {
+    const abs = resolve(expandHome(dir));
+    let names;
+    try {
+      names = readdirSync(abs).filter((n) => existsSync(join(abs, n, 'SKILL.md'))).sort();
+    } catch {
+      items.push(makeItem({ path: abs, name: tilde(abs), check: 'skills-missing', summary: 'no skills directory found', reason: `nothing at ${tilde(abs)}` }));
+      continue;
+    }
+    const rows = [];
+    for (const n of names) {
+      const file = join(abs, n, 'SKILL.md');
+      try {
+        const text = readFileSync(file, 'utf8');
+        const bytes = Buffer.byteLength(text);
+        const cut = lastSectionOffset(text);
+        rows.push({ n, file, bytes, tokens: estimateTokens(bytes), cut, cutTokens: cut < 0 ? 0 : estimateTokens(cut) });
+      } catch (e) {
+        items.push(makeItem({ path: file, name: tilde(file), check: 'unreadable', summary: 'cannot read', reason: e.message }));
+      }
+    }
+    rows.sort((a, b) => b.bytes - a.bytes || a.n.localeCompare(b.n));
+    for (const r of rows) {
+      const facts = { skill: r.n, bytes: r.bytes, estimatedTokens: r.tokens, capTokens: SKILL_CAP_TOKENS, warnTokens: SKILL_WARN_TOKENS, estimator: 'ceil(utf8 bytes / 4)', source: SKILL_CAP_SOURCE };
+      const at = { path: r.file, name: tilde(r.file) };
+      const size = `${r.n}: ${r.bytes} bytes, ~${r.tokens} tokens`;
+      const over = r.tokens > SKILL_WARN_TOKENS;
+      items.push(makeItem({
+        ...at, check: over ? 'skill-size' : 'skill-ok', summary: size,
+        reason: over ? `over ${SKILL_WARN_TOKENS} estimated tokens; Claude Code keeps only the first ${SKILL_CAP_TOKENS} when it re-injects the skill after compaction (${SKILL_CAP_SOURCE}); tokens are bytes / 4, an estimate` : '',
+        lines: over ? [`warning line ${SKILL_WARN_TOKENS} tokens, re-injection cap ${SKILL_CAP_TOKENS} tokens (estimate: bytes / 4)`] : [],
+        data: facts,
+      }));
+      if (r.cutTokens > SKILL_CAP_TOKENS) {
+        items.push(makeItem({
+          ...at, check: 'skill-cut', summary: `${r.n}: last ## section starts at ~${r.cutTokens} tokens`,
+          reason: `its last \`##\` section starts past the ${SKILL_CAP_TOKENS}-token re-injection cap, so after compaction it is cut (${SKILL_CAP_SOURCE}); move rarely needed parts to references/ or put the section earlier`,
+          data: { ...facts, lastSectionByte: r.cut, lastSectionEstimatedTokens: r.cutTokens },
+        }));
+      }
+    }
+  }
+  return items;
+}
+
 /** The latest prior review's verdict as the run's first item, when the config names one. */
 function reviewItems(config) {
   if (!config.reviewReport) return [];
@@ -549,12 +639,18 @@ const GO_ALIASES = [];
 function nextAction({ items }) {
   const unreadable = items.filter((it) => it.check === 'invalid-json' || it.check === 'unreadable' || it.check === 'invalid');
   if (unreadable.length) return nextStep('stop', `cannot lint ${listNames(unreadable)}: fix the settings file, then run again`);
-  const findings = items.filter((it) => it.verdict === 'warn' || it.verdict === 'fail').length;
+  const found = items.filter((it) => it.verdict === 'warn' || it.verdict === 'fail');
+  const findings = found.filter((it) => !SKILL_CHECKS.has(it.check)).length;
+  const skillFindings = found.length - findings;
+  const noSkills = items.filter((it) => it.check === 'skills-missing');
+  const noSkillsWhere = noSkills.length && `no skills directory at ${listNames(noSkills.map((it) => ({ name: tilde(it.path) })))}: re-run with the right --skills path`;
   const missing = items.filter((it) => it.check === 'missing');
-  const where = missing.length && `no settings file at ${listNames(missing.map((it) => ({ name: tilde(it.path) })))}: re-run with a project dir or a settings .json file`;
-  if (findings && missing.length) return nextStep('ask', `propose edits for the ${count(findings, 'settings finding')}; ${where}`);
-  if (missing.length) return nextStep('ask', where);
-  if (findings) return nextStep('ask', `propose edits for the ${count(findings, 'settings finding')} to the user; change nothing until they approve`);
+  const settingsWhere = missing.length && `no settings file at ${listNames(missing.map((it) => ({ name: tilde(it.path) })))}: re-run with a project dir or a settings .json file`;
+  const where = [settingsWhere, noSkillsWhere].filter(Boolean).join('; ');
+  const proposals = [findings && count(findings, 'settings finding'), skillFindings && count(skillFindings, 'skill-size finding')].filter(Boolean).join(' and ');
+  if (proposals && where) return nextStep('ask', `propose edits for the ${proposals}; ${where}`);
+  if (where) return nextStep('ask', where);
+  if (proposals) return nextStep('ask', `propose edits for the ${proposals} to the user; change nothing until they approve`);
   const review = items.find((it) => it.check === 'review' && it.verdict !== 'ok');
   if (review) return nextStep('done', `settings clean; latest harness review is ${review.reviewVerdict}: surface its recommendations to the user`);
   return nextStep('done', 'clean: no edits to propose');
@@ -575,6 +671,7 @@ async function main() {
         json: { type: 'boolean' },
         quiet: { type: 'boolean' },
         config: { type: 'string' },
+        skills: { type: 'string', multiple: true },
         ci: { type: 'boolean' }, // the older exit switch, kept so existing commands still run; a no-op now
       },
     });
@@ -593,12 +690,13 @@ async function main() {
   }
 
   const mode = outputMode(values);
-  if (positionals.length === 0) usageError('no path (expected a project directory or a settings .json file)');
+  const skillDirs = values.skills ?? [];
+  if (positionals.length === 0 && skillDirs.length === 0) usageError('no path (expected a project directory or a settings .json file, or --skills <dir>)');
 
   const config = loadConfig(values.config ?? null);
   const globalAllow = loadGlobalAllow(config);
   const linted = positionals.flatMap(resolveSettings).map((file) => lintFile(file, config, globalAllow));
-  const items = [...reviewItems(config), ...linted.flatMap((r) => r.items), ...driftItems(linted, config)];
+  const items = [...reviewItems(config), ...linted.flatMap((r) => r.items), ...driftItems(linted, config), ...skillItems(skillDirs)];
 
   const command = 'lint';
   const effect = effectFor(command, false);

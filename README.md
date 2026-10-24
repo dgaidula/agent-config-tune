@@ -73,6 +73,25 @@ For your global settings, pass both files:
 `lint.mjs ~/.claude/settings.json ~/.claude/settings.local.json` (a bare
 `~/.claude` is read as a project dir and refuses).
 
+**Skill size** (opt in with `--skills <dir>`, repeatable; no project path is
+needed): Claude Code re-injects an invoked skill after a compaction, capped at
+5,000 tokens per skill and 25,000 in total, and keeps only the start of the
+file ([context-window docs](https://code.claude.com/docs/en/context-window.md),
+“What survives compaction”). So a long `SKILL.md` loses its tail, which is often
+the closing rules. The linter lists every `<dir>/*/SKILL.md` with its bytes and
+estimated tokens (the estimate is UTF-8 bytes / 4, rounded up; no tokenizer),
+biggest first:
+
+| Finding | Verdict | Meaning |
+|---|---|---|
+| `skill-ok` | `ok` | The skill fits; its size is listed |
+| `skill-size` | `warn` | Over 4,000 estimated tokens, which leaves headroom under the 5,000 cap |
+| `skill-cut` | `warn` | The skill’s last `##` section starts past the 5,000-token cap, so that section is what gets cut (headings inside code fences do not count) |
+
+A skills directory that is not there refuses. The fix is to keep the always-needed
+procedure and the closing rules in `SKILL.md` and move rarely needed parts into
+`references/<topic>.md`, with a one-line pointer saying when to read each.
+
 Tests: `npm test` (Node 20+, `node --test`, no dependencies).
 
 ## Mode 2 — the CLAUDE.md review (advisory, measured, verified)

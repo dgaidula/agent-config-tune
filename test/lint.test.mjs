@@ -457,3 +457,82 @@ test('in-global: a project entry the global settings already allow is a warn nam
   const off = run(home, ['--json', '--config', 'off.json', 'dup']);
   assert.equal(JSON.parse(off.stdout).items.filter((i) => i.data.check === 'in-global').length, 0);
 }));
+
+// A skills directory with these SKILL.md bodies, one folder each.
+function skills(home, bodies) {
+  for (const [name, body] of Object.entries(bodies)) {
+    mkdirSync(path.join(home, 'skills', name), { recursive: true });
+    writeFileSync(path.join(home, 'skills', name, 'SKILL.md'), body);
+  }
+}
+
+test('--skills lists every SKILL.md with bytes and estimated tokens; at the 4000-token line it is ok, one byte-quad over it warns', () => withHome((home) => {
+  skills(home, { small: '# small\n\nOne line.\n', edge: 'a'.repeat(16000), over: 'a'.repeat(16001) });
+  const r = run(home, ['--json', '--skills', 'skills']);
+  const items = JSON.parse(r.stdout).items;
+  assert.deepEqual(items.map((i) => [i.data.skill, i.verdict, i.data.bytes, i.data.estimatedTokens]), [
+    ['over', 'warn', 16001, 4001],
+    ['edge', 'ok', 16000, 4000],
+    ['small', 'ok', 19, 5],
+  ]);
+  assert.equal(r.status, 1);
+  const over = items[0];
+  assert.equal(over.data.check, 'skill-size');
+  assert.equal(over.data.capTokens, 5000);
+  assert.equal(over.data.source, 'code.claude.com/docs/en/context-window.md');
+  assert.match(over.reason, /first 5000 .*re-injects the skill after compaction \(code\.claude\.com\/docs\/en\/context-window\.md\); tokens are bytes \/ 4, an estimate/);
+  assert.equal(run(home, ['--json', '--skills', 'skills']).stderr, '');
+}));
+
+test('--skills: a last ## section that starts past the 5000-token cap is a skill-cut warn; a ## inside a code fence is not a section', () => withHome((home) => {
+  const filler = 'x'.repeat(79) + '\n'; // 80 bytes a line
+  skills(home, {
+    // 20,400 bytes of body, then the last section: starts past 20,000 bytes
+    cut: `## Steps\n${filler.repeat(255)}## Done means\nDone.\n`,
+    // the same size, but its only late ## is inside a fence; the last real section is early
+    fenced: `## Steps\n${filler.repeat(255)}\`\`\`md\n## Done means\n\`\`\`\n`,
+    // a short skill with a late-looking heading never trips
+    tiny: '## A\n## B\n',
+  });
+  const items = JSON.parse(run(home, ['--json', '--skills', 'skills']).stdout).items;
+  const cutItems = items.filter((i) => i.data.check === 'skill-cut');
+  assert.deepEqual(cutItems.map((i) => [i.data.skill, i.verdict, i.data.lastSectionEstimatedTokens]), [['cut', 'warn', 5103]]);
+  assert.match(cutItems[0].reason, /^its last `##` section starts past the 5000-token re-injection cap, so after compaction it is cut/);
+  assert.deepEqual(items.filter((i) => i.data.skill === 'fenced').map((i) => i.data.check), ['skill-size']);
+  assert.deepEqual(items.filter((i) => i.data.skill === 'tiny').map((i) => i.verdict), ['ok']);
+}));
+
+test('--skills --brief: one line per skill, the summary, and a next line that names skill-size findings; clean skills exit 0 and are done', () => withHome((home) => {
+  skills(home, { big: 'a'.repeat(17000), fine: 'ok\n' });
+  const r = run(home, ['--brief', '--skills', 'skills']);
+  const out = lines(r.stdout);
+  assert.match(out[0], /^⚠ warn {3}big: 17000 bytes, ~4250 tokens +~\/skills\/big\/SKILL\.md {2}\(over 4000 estimated tokens/);
+  assert.match(out[1], /^✓ ok {5}fine: 3 bytes, ~1 tokens +~\/skills\/fine\/SKILL\.md$/);
+  assert.equal(out[2], 'summary: ok=1 warn=1 skip=0 refuse=0 fail=0');
+  assert.equal(out[3], 'next: ask  (propose edits for the 1 skill-size finding to the user; change nothing until they approve)');
+  rmSync(path.join(home, 'skills', 'big'), { recursive: true });
+  const clean = run(home, ['--quiet', '--skills', 'skills']);
+  assert.equal(clean.stdout, 'summary: ok=1 warn=0 skip=0 refuse=0 fail=0\nnext: done  (clean: no edits to propose)\n');
+  assert.equal(clean.status, 0);
+}));
+
+test('--skills refusal: a skills directory that is not there refuses and exit 1; no path and no --skills is still a usage error', () => withHome((home) => {
+  const r = run(home, ['--brief', '--skills', 'nowhere']);
+  assert.match(r.stdout, /^⊘ refuse no skills directory found +~\/nowhere {2}\(nothing at ~\/nowhere\)$/m);
+  assert.match(r.stdout, /^next: ask {2}\(no skills directory at ~\/nowhere: re-run with the right --skills path\)$/m);
+  assert.equal(r.status, 1);
+  const usage = run(home, ['--brief']);
+  assert.equal(usage.status, 2);
+  assert.equal(usage.stdout, '');
+  assert.match(usage.stderr, /--skills <dir>/);
+}));
+
+test('--skills together with a project path: settings and skills findings are both reported, the run exits 1 once', () => withHome((home) => {
+  project(home, 'ok', CLEAN);
+  skills(home, { big: 'a'.repeat(17000) });
+  const r = run(home, ['--json', 'ok', '--skills', 'skills']);
+  const out = JSON.parse(r.stdout);
+  assert.deepEqual(out.items.map((i) => i.data.check), ['clean', 'skill-size']);
+  assert.equal(out.exit, 1);
+  assert.equal(r.status, 1);
+}));
