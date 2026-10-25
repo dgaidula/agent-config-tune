@@ -29,7 +29,7 @@ node skills/claude-config-tune/lint.mjs --json <project-dir>...    # one stable 
 ```
 
 Zero dependencies, never edits. It follows the
-[`mjs-tool/2`](https://github.com/dgaidula/mjs-tool-skeleton) contract:
+[`mjs-tool/3`](https://github.com/dgaidula/mjs-tool-skeleton) contract:
 human, `--brief`, `--json` and `--quiet` output rendered from one list of
 items, a closing `next:` line that says what to do next, and exit codes
 that mean the same thing every time: `0` clean, `1` any finding, `2` a usage

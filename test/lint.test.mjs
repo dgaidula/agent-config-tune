@@ -55,13 +55,13 @@ test('--brief snapshot: one line per finding, then the summary and next lines', 
   project(home, 'every', EVERY);
   const r = run(home, ['--brief', 'every']);
   assert.deepEqual(lines(r.stdout), [
-    '✗ fail   superseded Bash(git status)            ~/every  (covered by Bash(git *))',
-    '✗ fail   redundant mcp__github__get_issue       ~/every  (covered by mcp__github__*)',
-    '⚠ warn   consolidate 2 linear tools into mcp__linear__* ~/every  (2 enumerated tools and no wildcard; linear is not a sensitive server)',
-    '⚠ warn   sensitive-* mcp__slack__*              ~/every  (the wildcard auto-approves send/delete-class tools and any the server adds later; consider enumerating instead)',
-    '• skip   enumerated 2 gmail tools               ~/every  (a sensitive server, so kept as is; consolidation is deliberately not suggested)',
-    '⚠ warn   one-off? Bash(sed -n 1,20p /tmp/x.txt) ~/every  (looks single-use)',
-    '⚠ warn   push-guard Bash(git *)                 ~/every  (no deny on git push: a broad git glob auto-approves pushes; keep pushes behind an explicit prompt)',
+    'fail superseded Bash(git status)  ~/every  (covered by Bash(git *))',
+    'fail redundant mcp__github__get_issue  ~/every  (covered by mcp__github__*)',
+    'warn consolidate 2 linear tools into mcp__linear__*  ~/every  (2 enumerated tools and no wildcard; linear is not a sensitive server)',
+    'warn sensitive-* mcp__slack__*  ~/every  (the wildcard auto-approves send/delete-class tools and any the server adds later; consider enumerating instead)',
+    'skip enumerated 2 gmail tools  ~/every  (a sensitive server, so kept as is; consolidation is deliberately not suggested)',
+    'warn one-off? Bash(sed -n 1,20p /tmp/x.txt)  ~/every  (looks single-use)',
+    'warn push-guard Bash(git *)  ~/every  (no deny on git push: a broad git glob auto-approves pushes; keep pushes behind an explicit prompt)',
     'summary: ok=0 warn=4 skip=1 refuse=0 fail=2',
     'next: ask  (propose edits for the 6 settings findings to the user; change nothing until they approve)',
   ]);
@@ -77,7 +77,7 @@ test('--json snapshot: clean files and a drift entry, with next as the object', 
   assert.deepEqual(JSON.parse(r.stdout), {
     tool: 'lint',
     version: VERSION,
-    contract: 'mjs-tool/2',
+    contract: 'mjs-tool/3',
     command: 'lint',
     effect: 'read-only',
     exit: 1,
@@ -133,7 +133,7 @@ test('a clean project: one ok item, exit 0, next done', () => withHome((home) =>
   project(home, 'tidy', CLEAN);
   const r = run(home, ['--brief', 'tidy']);
   assert.deepEqual(lines(r.stdout), [
-    '✓ ok     clean (1 allow, 1 deny)                ~/tidy',
+    'ok clean (1 allow, 1 deny)  ~/tidy',
     'summary: ok=1 warn=0 skip=0 refuse=0 fail=0',
     'next: done  (clean: no edits to propose)',
   ]);
@@ -177,11 +177,11 @@ test('a path with no settings file refuses; invalid JSON fails and next is stop'
   mkdirSync(path.join(home, 'bad', '.claude'), { recursive: true });
   writeFileSync(path.join(home, 'bad', '.claude', 'settings.local.json'), '{"permissions":');
   const missing = run(home, ['--brief', 'nowhere']);
-  assert.match(missing.stdout, /^⊘ refuse no settings file found {17}~\/nowhere {2}\(nothing at ~\/nowhere\/\.claude\/settings\.local\.json\)$/m);
+  assert.match(missing.stdout, /^refuse no settings file found {2}~\/nowhere {2}\(nothing at ~\/nowhere\/\.claude\/settings\.local\.json\)$/m);
   assert.match(missing.stdout, /^next: ask /m);
   assert.equal(missing.status, 1);
   const invalid = run(home, ['--brief', 'bad']);
-  assert.match(invalid.stdout, /^✗ fail {3}invalid JSON {27}~\/bad {2}\(/m);
+  assert.match(invalid.stdout, /^fail invalid JSON {2}~\/bad {2}\(/m);
   assert.match(invalid.stdout, /^next: stop {2}\(cannot lint ~\/bad: fix the settings file, then run again\)$/m);
   assert.equal(invalid.status, 1);
 }));
@@ -217,7 +217,7 @@ test('the global local settings file is shown whole, never as a bare ~', () => w
   writeFileSync(path.join(home, '.claude', 'settings.local.json'), JSON.stringify({ permissions: { allow: ['Bash(ls *)'], deny: [] } }));
   project(home, 'other', { allow: ['Bash(ls *)', 'Bash(npm test)'], deny: [] });
   const r = run(home, ['--brief', '.claude/settings.json', '.claude/settings.local.json']);
-  assert.match(r.stdout, /^✓ ok {5}clean \(1 allow, 0 deny\) {16}~\/\.claude\/settings\.local\.json$/m);
+  assert.match(r.stdout, /^ok clean \(1 allow, 0 deny\) {2}~\/\.claude\/settings\.local\.json$/m);
   const alone = run(home, ['--brief', '.claude/settings.local.json', 'other']);
   assert.match(alone.stdout, /\(missing from ~\/\.claude\/settings\.local\.json\)$/m);
 }));
@@ -265,28 +265,28 @@ test('a tune.json beside the script is auto-loaded with no --config', () => with
   assert.match(bare.stdout, /allow drift Bash\(deploy-a \*\)/);
   assert.equal(bare.status, 1);
   const bareTools = run(home, ['--brief', 'tools']);
-  assert.match(bareTools.stdout, /^⚠ warn {3}consolidate 2 linear tools/m);
+  assert.match(bareTools.stdout, /^warn consolidate 2 linear tools/m);
 
   const script = deployWithTune(home, { siteSpecific: ['^Bash\\(deploy-'], sensitiveServers: ['^linear$'] });
   const tuned = run(home, ['--brief', 'site-a', 'site-b'], { script });
   assert.doesNotMatch(tuned.stdout, /drift/);
-  assert.match(tuned.stdout, /^✓ ok {5}allow\/deny lists match {17}cross-project$/m);
+  assert.match(tuned.stdout, /^ok allow\/deny lists match {2}cross-project$/m);
   assert.equal(tuned.status, 0);
   const tunedTools = run(home, ['--brief', 'tools'], { script });
-  assert.match(tunedTools.stdout, /^• skip {3}enumerated 2 linear tools/m);
+  assert.match(tunedTools.stdout, /^skip enumerated 2 linear tools/m);
   assert.equal(tunedTools.status, 0);
 }));
 
 test('sensitive servers match case-insensitively, defaults and tune.json alike', () => withHome((home) => {
   project(home, 'hosted', { allow: ['mcp__claude_ai_Composio__COMPOSIO_SEARCH_TOOLS', 'mcp__claude_ai_Composio__COMPOSIO_GET_TOOL_SCHEMAS'], deny: [] });
   const r = run(home, ['--brief', 'hosted']);
-  assert.match(r.stdout, /^• skip {3}enumerated 2 claude_ai_Composio tools/m);
+  assert.match(r.stdout, /^skip enumerated 2 claude_ai_Composio tools/m);
   assert.doesNotMatch(r.stdout, /consolidate/);
   assert.equal(r.status, 0);
 
   project(home, 'tools', { allow: ['mcp__Linear__list_issues', 'mcp__Linear__get_issue'], deny: [] });
   const script = deployWithTune(home, { sensitiveServers: ['^linear$'] });
-  assert.match(run(home, ['--brief', 'tools'], { script }).stdout, /^• skip {3}enumerated 2 Linear tools/m);
+  assert.match(run(home, ['--brief', 'tools'], { script }).stdout, /^skip enumerated 2 Linear tools/m);
 }));
 
 test('drift: settings.json and settings.local.json in one dir are one layered scope, compared as their union', () => withHome((home) => {
@@ -335,8 +335,8 @@ test('reviewReport: the newest report’s verdict is the first item, a skip unle
   reviews(home, { older: 'CLEAN', newest: 'CHANGES RECOMMENDED' });
   const r = run(home, ['--brief', '--config', 'tune.json', 'tidy']);
   assert.deepEqual(lines(r.stdout), [
-    '• skip   latest review: CHANGES RECOMMENDED     ~/reviews/2026-09-29.md  (address its recommendations alongside this tune)',
-    '✓ ok     clean (1 allow, 1 deny)                ~/tidy',
+    'skip latest review: CHANGES RECOMMENDED  ~/reviews/2026-09-29.md  (address its recommendations alongside this tune)',
+    'ok clean (1 allow, 1 deny)  ~/tidy',
     'summary: ok=1 warn=0 skip=1 refuse=0 fail=0',
     'next: done  (settings clean; latest harness review is CHANGES RECOMMENDED: surface its recommendations to the user)',
   ]);
@@ -347,7 +347,7 @@ test('reviewReport: a CLEAN latest review is ok and leaves a clean run at exit 0
   project(home, 'tidy', CLEAN);
   reviews(home, { older: 'BLOCKING', newest: 'CLEAN' });
   const r = run(home, ['--brief', '--config', 'tune.json', 'tidy']);
-  assert.equal(lines(r.stdout)[0], '✓ ok     latest review: CLEAN                   ~/reviews/2026-09-29.md');
+  assert.equal(lines(r.stdout)[0], 'ok latest review: CLEAN  ~/reviews/2026-09-29.md');
   assert.equal(lines(r.stdout).at(-1), 'next: done  (clean: no edits to propose)');
   assert.equal(r.status, 0);
 }));
@@ -356,7 +356,7 @@ test('reviewReport: settings findings with a non-CLEAN review exit 1, ask about 
   project(home, 'every', EVERY);
   reviews(home, { older: 'CLEAN', newest: 'BLOCKING' });
   const r = run(home, ['--brief', '--config', 'tune.json', 'every']);
-  assert.match(lines(r.stdout)[0], /^• skip {3}latest review: BLOCKING /);
+  assert.match(lines(r.stdout)[0], /^skip latest review: BLOCKING /);
   assert.equal(lines(r.stdout).at(-1), 'next: ask  (propose edits for the 6 settings findings to the user; change nothing until they approve)');
   assert.equal(r.status, 1);
 }));
@@ -380,8 +380,8 @@ test('reviewReport: nothing readable there is one skip item naming the path and 
   writeFileSync(path.join(home, 'tune.json'), JSON.stringify({ reviewReport: '~/no-reviews-here' }));
   const r = run(home, ['--brief', '--config', 'tune.json', 'tidy']);
   assert.deepEqual(lines(r.stdout).slice(0, 3), [
-    '• skip   review report missing                  ~/no-reviews-here  (nothing at ~/no-reviews-here)',
-    '✓ ok     clean (1 allow, 1 deny)                ~/tidy',
+    'skip review report missing  ~/no-reviews-here  (nothing at ~/no-reviews-here)',
+    'ok clean (1 allow, 1 deny)  ~/tidy',
     'summary: ok=1 warn=0 skip=1 refuse=0 fail=0',
   ]);
   assert.equal(r.status, 0);
@@ -390,7 +390,7 @@ test('reviewReport: nothing readable there is one skip item naming the path and 
   chmodSync(path.join(home, 'locked.md'), 0o000);
   writeFileSync(path.join(home, 'tune.json'), JSON.stringify({ reviewReport: '~/locked.md' }));
   const u = run(home, ['--brief', '--config', 'tune.json', 'tidy']);
-  assert.match(lines(u.stdout)[0], /^• skip {3}review report unreadable +~\/locked\.md {2}\(cannot read ~\/locked\.md: EACCES\)$/);
+  assert.match(lines(u.stdout)[0], /^skip review report unreadable {2}~\/locked\.md {2}\(cannot read ~\/locked\.md: EACCES\)$/);
   assert.equal(u.status, 0);
 }));
 
@@ -422,8 +422,8 @@ test('a project dir reads both layers: settings.json alone is linted, and a pair
   mkdirSync(path.join(home, 'shared', '.claude'), { recursive: true });
   writeFileSync(path.join(home, 'shared', '.claude', 'settings.json'), JSON.stringify({ permissions: { allow: ['Bash(git *)', 'Bash(git status)'], deny: [] } }));
   const alone = run(home, ['--brief', 'shared']);
-  assert.match(alone.stdout, /^✗ fail {3}superseded Bash\(git status\) +~\/shared\/\.claude\/settings\.json {2}\(covered by Bash\(git \*\)\)$/m);
-  assert.doesNotMatch(alone.stdout, /^⊘ refuse/m);
+  assert.match(alone.stdout, /^fail superseded Bash\(git status\) {2}~\/shared\/\.claude\/settings\.json {2}\(covered by Bash\(git \*\)\)$/m);
+  assert.doesNotMatch(alone.stdout, /^refuse /m);
   writeFileSync(path.join(home, 'shared', '.claude', 'settings.local.json'), JSON.stringify({ permissions: { allow: ['Bash(ls *)'] } }));
   const pair = JSON.parse(run(home, ['--json', 'shared']).stdout);
   assert.deepEqual([...new Set(pair.items.map((i) => i.path))], [
@@ -506,8 +506,8 @@ test('--skills --brief: one line per skill, the summary, and a next line that na
   skills(home, { big: 'a'.repeat(17000), fine: 'ok\n' });
   const r = run(home, ['--brief', '--skills', 'skills']);
   const out = lines(r.stdout);
-  assert.match(out[0], /^⚠ warn {3}big: 17000 bytes, ~4250 tokens +~\/skills\/big\/SKILL\.md {2}\(over 4000 estimated tokens/);
-  assert.match(out[1], /^✓ ok {5}fine: 3 bytes, ~1 tokens +~\/skills\/fine\/SKILL\.md$/);
+  assert.match(out[0], /^warn big: 17000 bytes, ~4250 tokens {2}~\/skills\/big\/SKILL\.md {2}\(over 4000 estimated tokens/);
+  assert.match(out[1], /^ok fine: 3 bytes, ~1 tokens {2}~\/skills\/fine\/SKILL\.md$/);
   assert.equal(out[2], 'summary: ok=1 warn=1 skip=0 refuse=0 fail=0');
   assert.equal(out[3], 'next: ask  (propose edits for the 1 skill-size finding to the user; change nothing until they approve)');
   rmSync(path.join(home, 'skills', 'big'), { recursive: true });
@@ -518,7 +518,7 @@ test('--skills --brief: one line per skill, the summary, and a next line that na
 
 test('--skills refusal: a skills directory that is not there refuses and exit 1; no path and no --skills is still a usage error', () => withHome((home) => {
   const r = run(home, ['--brief', '--skills', 'nowhere']);
-  assert.match(r.stdout, /^⊘ refuse no skills directory found +~\/nowhere {2}\(nothing at ~\/nowhere\)$/m);
+  assert.match(r.stdout, /^refuse no skills directory found {2}~\/nowhere {2}\(nothing at ~\/nowhere\)$/m);
   assert.match(r.stdout, /^next: ask {2}\(no skills directory at ~\/nowhere: re-run with the right --skills path\)$/m);
   assert.equal(r.status, 1);
   const usage = run(home, ['--brief']);
