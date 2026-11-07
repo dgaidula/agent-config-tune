@@ -92,7 +92,11 @@ A skills directory that is not there refuses. The fix is to keep the always-need
 procedure and the closing rules in `SKILL.md` and move rarely needed parts into
 `references/<topic>.md`, with a one-line pointer saying when to read each.
 
-Tests: `npm test` (Node 20+, `node --test`, no dependencies).
+Tests: `npm test` (Node 20+, `node --test`, no dependencies). The `split.mjs` and
+`measure.mjs` tests run each tool from a temporary copy; `measure.mjs`’s tests run
+on a `PATH` of the stub `claude`’s folder (first), `/usr/bin` and `/bin`, and check
+those for any other `claude` before running, so no test can reach a real `claude`, and `test/fixtures/` holds two made-up CLAUDE.md files for the split round
+trip.
 
 ## Mode 2 — the CLAUDE.md review (advisory, measured, verified)
 
@@ -103,6 +107,106 @@ method: six heuristics in descending order of yield (the big one:
 measurement step (report "N → M tokens per session," not a percentage
 feeling), and a verification protocol (date the trim, watch the following
 sessions, restore any trimmed rule the model violates — once).
+
+### Measuring each bullet: `split.mjs` and `measure.mjs`
+
+The method needs a price for each bullet, not only a total. Two more tools carry
+that out. They follow the same `mjs-tool/3` contract as the linter: human,
+`--brief`, `--json` and `--quiet` output from one item list, a dry run unless
+`--go`, exit codes 0/1/2/3, and no prompting. `--help` has the full flag list and
+`--cheat` the common command lines.
+
+1. `split.mjs` cuts the file into chunks, one per bullet.
+2. `measure.mjs` prices every chunk, so each bullet’s cost per session is a number
+   and not a feeling.
+3. Trim the expensive chunks that carry the least (the heuristics are in
+   `SKILL.md`), then run both again on the trimmed file to report “N → M tokens per
+   session”.
+
+```sh
+node skills/claude-config-tune/split.mjs ~/.claude/CLAUDE.md --out /tmp/chunks        # dry run: lists the chunks
+node skills/claude-config-tune/split.mjs ~/.claude/CLAUDE.md --out /tmp/chunks --go   # writes them
+node skills/claude-config-tune/measure.mjs /tmp/chunks                                # dry run: lists what it would price
+node skills/claude-config-tune/measure.mjs /tmp/chunks --go --brief                   # prices them (spends subscription usage)
+```
+
+#### `split.mjs`
+
+Writes `<dir>/<section>--<nn>-<label>.txt` for each chunk of one Markdown file:
+
+- a **bullet** (with its wrapped lines and nested bullets) or a **paragraph**;
+- the **section** is the slug of the nearest heading above it (`head` before the
+  first), and a heading used twice gets `-2`, `-3`;
+- the **number** counts chunks through the whole file, so sorting by it restores
+  source order;
+- the **label** is the bullet’s bold lead-in (`- **Secrets**: …` gives
+  `secrets`), else its first 30 characters;
+- each heading is written too, as `<section>--heading.txt`, and the first `# `
+  heading as `title.txt`.
+
+HTML comment blocks are not chunked (a comment is not something to trim); they are
+counted in a `comments` item so the omission is visible.
+
+`--out` must name a folder that does not exist or is empty. A folder with anything
+in it is refused, so a stale chunk from an earlier cut can never be priced.
+
+It assumes a CLAUDE.md in ordinary Markdown: ATX headings (`## Name`), `-`, `*`,
+`+` or numbered bullets, blank-line paragraphs and fenced code blocks. It does not
+handle setext headings (underlined with `===` or `---`), a table as anything but a
+paragraph, a bullet inside a blockquote, or front matter (a YAML block is one
+chunk). A Markdown parser would read these; none is used, so the skill folder
+stays a copy-and-run install with no `node_modules`.
+
+#### `measure.mjs`
+
+For each `<chunk-dir>/*.txt`, one `claude -p` run on the haiku model with the chunk
+appended to the system prompt (`--append-system-prompt-file`), and one baseline run
+appending a one-line file. A chunk’s cost is the prompt tokens of its run (input,
+cache creation and cache read) minus the baseline’s. Heading files
+(`*--heading.txt`, `title.txt`) are listed as skipped and not priced.
+
+The runs happen in a fresh empty folder, so no project CLAUDE.md adds to either
+side, and with `--no-session-persistence`, so they leave no transcripts. `--workers
+<n>` (1 to 16, default 4) sets how many go at once. Each run has a 180-second bound
+that ends a hang.
+
+- **A dry run is the default and runs nothing.** It lists the baseline run and every
+  chunk it would price.
+- **`--go` makes one baseline run plus one run per chunk,** so a 40-chunk file is 41
+  `claude -p` calls on your subscription. Check that you have the headroom first.
+- **Subscription login only.** It refuses to run, dry run included, with exit 3 and
+  nothing on stdout, while any of these environment variables is set to a value,
+  because a run would then bill an API account: `ANTHROPIC_API_KEY`,
+  `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_AWS_API_KEY`, `ANTHROPIC_FOUNDRY_API_KEY`,
+  `ANTHROPIC_FOUNDRY_AUTH_TOKEN`, `AWS_BEARER_TOKEN_BEDROCK`,
+  `ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_PROFILE`, `CLAUDE_CODE_USE_BEDROCK`,
+  `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY` (from
+  [`code.claude.com/docs/en/env-vars`](https://code.claude.com/docs/en/env-vars),
+  read 2026-11-06), `CLAUDE_CODE_USE_ANTHROPIC_AWS`,
+  `CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD` and `CLAUDE_CODE_USE_MANTLE` (each makes
+  `claude auth status` report a third-party provider, claude 2.1.319). It never
+  unsets one for you; unset it yourself and run again. An empty value counts as
+  unset.
+- **Then it asks claude which account it would use.** Dry run included, it runs
+  `claude auth status --json` (which spends nothing) in a fresh empty folder, as the
+  runs are, and refuses with exit 3 and one line unless that says `loggedIn` true,
+  `authMethod` `claude.ai` and `apiProvider` `firstParty`. That catches what the
+  variable list cannot see: a settings-file `apiKeyHelper` or an
+  `env.ANTHROPIC_API_KEY`. A clean dry run names the login on its baseline line.
+- It needs `claude` on `PATH`; without one it exits 3.
+
+Each chunk’s item says `N tokens`; the last item, `total`, sums them. A run that
+fails is a `fail` item (the rest still run). A chunk that comes back under the
+baseline is a `warn`: the cost is noise, so run it again. A failed baseline stops the
+run before any chunk is priced. It does not retry a failed run.
+
+Known limits:
+
+- The login check trusts `claude auth status --json` and its field names as claude
+  2.1.319 prints them. A later claude that renames one is refused, not passed, until
+  this is updated.
+- `measure.mjs` has run only against the tests’ stub `claude`, never live, so no
+  real chunk has been priced with it yet.
 
 ### Case study
 
@@ -117,7 +221,7 @@ observed in the sessions since (trim dated 2026-07-19, watch ongoing).
 ## Token footprint
 
 ~175 tokens always-on (only the description loads until the skill fires) —
-measured with `claude plugin details claude-config-tune`; re-run it yourself,
+measured with `claude plugin details agent-config-tune`; re-run it yourself,
 the numbers drift as the skill evolves. A config-hygiene skill that bloated
 your config would be refuting itself.
 
@@ -127,7 +231,7 @@ As a plugin:
 
 ```
 /plugin marketplace add dgaidula/claude-config-tune
-/plugin install claude-config-tune
+/plugin install agent-config-tune
 ```
 
 Or manually, as a personal skill:

@@ -9,6 +9,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+delete process.env.FORCE_COLOR; delete process.env.NO_COLOR;
+
 const LINT = fileURLToPath(new URL('../skills/claude-config-tune/lint.mjs', import.meta.url));
 const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
@@ -114,7 +116,7 @@ test('human mode: a block per item, and next as the last line', () => withHome((
   project(home, 'every', EVERY);
   const r = run(home, ['every']);
   const out = lines(r.stdout);
-  assert.deepEqual(out.slice(0, 3), ['✗ ~/every', '    superseded Bash(git status)', '    fail: covered by Bash(git *)']);
+  assert.deepEqual(out.slice(1, 4), ['✗ ~/every', '    superseded Bash(git status)', '    fail: covered by Bash(git *)']);
   assert.equal(out.at(-1), 'next: your call  (propose edits for the 6 settings findings to the user; change nothing until they approve)');
   assert.equal(r.status, 1);
 }));
@@ -396,7 +398,7 @@ test('reviewReport: nothing readable there is one skip item naming the path and 
 
 test('--help prints the header, not code; --version prints the package version', () => withHome((home) => {
   const help = run(home, ['--help']);
-  assert.match(help.stdout, /^claude-config-tune lint — /);
+  assert.match(help.stdout, /^\nclaude-config-tune lint — /);
   assert.match(help.stdout, /^Exit codes:$/m);
   assert.doesNotMatch(help.stdout, /^import /m);
   assert.equal(help.status, 0);

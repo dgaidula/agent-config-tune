@@ -5,7 +5,7 @@
   },
   "plugins": [
     {
-      "name": "claude-config-tune",
+      "name": "agent-config-tune",
       "source": "./",
       "description": "Lint and tune Claude Code configuration: deterministic permission allow-list hygiene plus a measured, verified method for trimming CLAUDE.md context cost."
     }

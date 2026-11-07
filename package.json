@@ -1,6 +1,6 @@
 {
   "name": "claude-config-tune",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Lint and tune Claude Code configuration: a deterministic, report-only permission allow-list linter (mjs-tool/3 contract) plus a measured method for trimming CLAUDE.md context cost.",
   "private": true,
   "type": "module",

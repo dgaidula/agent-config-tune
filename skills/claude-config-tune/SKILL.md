@@ -160,6 +160,22 @@ a report; the user approves each one; never auto-edit.
 `count_tokens` API, or words × 1.33 labeled as an estimate. Report it as
 "N → M tokens per session" (recurring savings), not a percentage feeling.
 
+**Measure each bullet** (to find what to trim, not only the total): cut the file
+into one chunk per bullet, then price every chunk. `split.mjs` is the chunker and
+`measure.mjs` the measuring rig (the repository README documents both).
+
+```bash
+node <skill-dir>/split.mjs <CLAUDE.md> --out <chunk-dir> --go
+node <skill-dir>/measure.mjs --brief <chunk-dir>          # dry run: lists what it would price
+node <skill-dir>/measure.mjs --brief --go <chunk-dir>     # prices it
+```
+
+`measure.mjs --go` makes one `claude -p` run per chunk plus a baseline, on the
+subscription login only, so tell the user the count and let them say go. It
+refuses to run (exit 3) while an API-key variable such as `ANTHROPIC_API_KEY` is
+set: report that and stop, never unset it yourself. Both tools have the `--brief`,
+`--json` and `--quiet` modes and the `next:` line of `lint.mjs`.
+
 **Verify the trim:** record the trim date in the tuned file. Over the
 following sessions, watch for the model violating a trimmed rule — one
 violation means the rule was load-bearing; restore it immediately rather
