@@ -230,15 +230,15 @@ your config would be refuting itself.
 As a plugin:
 
 ```
-/plugin marketplace add dgaidula/claude-config-tune
+/plugin marketplace add dgaidula/agent-config-tune
 /plugin install agent-config-tune
 ```
 
 Or manually, as a personal skill:
 
 ```sh
-git clone https://github.com/dgaidula/claude-config-tune
-cp -r claude-config-tune/skills/claude-config-tune ~/.claude/skills/
+git clone https://github.com/dgaidula/agent-config-tune
+cp -r agent-config-tune/skills/claude-config-tune ~/.claude/skills/
 ```
 
 The linter also works standalone — it's a single zero-dependency `.mjs` you
